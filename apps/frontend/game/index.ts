@@ -2,9 +2,7 @@ import { HTTP_BACKKEND } from "@/config";
 import axios from "axios";
 import { Camera } from "./ camera";
 
-// ----------------------------
-// TYPES
-// ----------------------------
+
 export type Point = {
   x: number;
   y: number;
@@ -21,6 +19,7 @@ export type Shape =
       y: number;
       width: number;
       height: number;
+      cornerRadius?: number;
     })
   | (ShapeBase & {
       type: "circle";
@@ -69,11 +68,12 @@ type BBox = {
   height: number;
 };
 
-type HandleName = "tl" | "tr" | "bl" | "br";
+type HandleName =
+  | "tl" | "tr" | "bl" | "br"   // corners
+  | "t" | "b" | "l" | "r";      // edges
 
-// ----------------------------
-// GEOMETRY HELPERS
-// ----------------------------
+
+
 function distance(aX: number, aY: number, bX: number, bY: number) {
   const dx = aX - bX;
   const dy = aY - bY;
@@ -270,15 +270,16 @@ function resizeShapeFromOriginal(
       target.height = newH;
       break;
 
-    case "circle": {
-      const cx = newL + newW / 2;
-      const cy = newT + newH / 2;
-      target.centerX = cx;
-      target.centerY = cy;
-      target.radiusX = newW / 2;
-      target.radiusY = newH / 2;
-      break;
-    }
+      case "circle": {
+        const cx = newL + newW / 2;
+        const cy = newT + newH / 2;
+        target.centerX = cx;
+        target.centerY = cy;
+        target.radiusX = newW / 2;
+        target.radiusY = newH / 2;
+        break;
+      }
+      
 
     case "diamond": {
       const cx = newL + newW / 2;
@@ -320,13 +321,24 @@ function resizeShapeFromOriginal(
 }
 
 function getHandlesFromBBox(bbox: BBox) {
+  const { x, y, width, height } = bbox;
+  const cx = x + width / 2;
+  const cy = y + height / 2;
+
   return [
-    { name: "tl", x: bbox.x, y: bbox.y },
-    { name: "tr", x: bbox.x + bbox.width, y: bbox.y },
-    { name: "bl", x: bbox.x, y: bbox.y + bbox.height },
-    { name: "br", x: bbox.x + bbox.width, y: bbox.y + bbox.height },
+    { name: "tl", x, y },
+    { name: "t", x: cx, y },
+    { name: "tr", x: x + width, y },
+
+    { name: "l", x, y: cy },
+    { name: "r", x: x + width, y: cy },
+
+    { name: "bl", x, y: y + height },
+    { name: "b", x: cx, y: y + height },
+    { name: "br", x: x + width, y: y + height },
   ] as { name: HandleName; x: number; y: number }[];
 }
+
 
 function resizedBBoxFromHandle(
   originalBBox: BBox,
@@ -336,46 +348,55 @@ function resizedBBoxFromHandle(
 ): BBox {
   let { x, y, width, height } = originalBBox;
 
+  let left = x;
+  let right = x + width;
+  let top = y;
+  let bottom = y + height;
+
+  // Movement rules
+  switch (handle) {
+    case "tl":
+      left = mouseX;
+      top = mouseY;
+      break;
+    case "t":
+      top = mouseY;
+      break;
+    case "tr":
+      right = mouseX;
+      top = mouseY;
+      break;
+    case "l":
+      left = mouseX;
+      break;
+    case "r":
+      right = mouseX;
+      break;
+    case "bl":
+      left = mouseX;
+      bottom = mouseY;
+      break;
+    case "b":
+      bottom = mouseY;
+      break;
+    case "br":
+      right = mouseX;
+      bottom = mouseY;
+      break;
+  }
+
   const minSize = 10;
-  const right = x + width;
-  const bottom = y + height;
-
-  let newLeft = x;
-  let newTop = y;
-  let newRight = right;
-  let newBottom = bottom;
-
-  if (handle === "tl") {
-    newLeft = mouseX;
-    newTop = mouseY;
-  } else if (handle === "tr") {
-    newRight = mouseX;
-    newTop = mouseY;
-  } else if (handle === "bl") {
-    newLeft = mouseX;
-    newBottom = mouseY;
-  } else if (handle === "br") {
-    newRight = mouseX;
-    newBottom = mouseY;
-  }
-
-  if (newRight - newLeft < minSize) {
-    if (handle === "tl" || handle === "bl") newLeft = newRight - minSize;
-    else newRight = newLeft + minSize;
-  }
-
-  if (newBottom - newTop < minSize) {
-    if (handle === "tl" || handle === "tr") newTop = newBottom - minSize;
-    else newBottom = newTop + minSize;
-  }
+  if (right - left < minSize) right = left + minSize;
+  if (bottom - top < minSize) bottom = top + minSize;
 
   return {
-    x: newLeft,
-    y: newTop,
-    width: newRight - newLeft,
-    height: newBottom - newTop,
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
   };
 }
+
 
 // ----------------------------
 // FIND SHAPE AT POINT
@@ -925,8 +946,15 @@ function clearCanvas(
   ctx.save();
   camera.applyTransform(ctx);
 
-  shapes.forEach((s) => {
-    ctx.strokeStyle = "white";
+  shapes.forEach((s, i) => {
+    if (i === selectedIndex) {
+        ctx.strokeStyle = "#00aaff";  // bright blue
+        ctx.lineWidth = 2 / camera.scale;
+    } else {
+        ctx.strokeStyle = "white";
+        ctx.lineWidth = 1 / camera.scale;
+    }
+
     ctx.fillStyle = "white";
 
     if (s.type === "rect") {
@@ -1014,19 +1042,27 @@ function clearCanvas(
     const s = shapes[selectedIndex];
     const bbox = getBoundingBox(s);
     const handles = getHandlesFromBBox(bbox);
-
-    ctx.strokeStyle = "rgba(255,255,255,0.7)";
-    ctx.setLineDash([4, 2]);
+  
+    ctx.strokeStyle = "#4EA8FF";       // FIGMA BLUE
+    ctx.lineWidth = 2 / camera.scale;  // Figma-style thickness
+    ctx.setLineDash([6 / camera.scale, 3 / camera.scale]);
     ctx.strokeRect(bbox.x, bbox.y, bbox.width, bbox.height);
     ctx.setLineDash([]);
-
+  
+    const size = 10 / camera.scale;
+  
     ctx.fillStyle = "white";
-    const size = 6 / camera.scale;
-
+    ctx.strokeStyle = "#4EA8FF";
+    ctx.lineWidth = 1.5 / camera.scale;
+  
     handles.forEach((h) => {
-      ctx.fillRect(h.x - size / 2, h.y - size / 2, size, size);
+      ctx.beginPath();
+      ctx.rect(h.x - size / 2, h.y - size / 2, size, size);
+      ctx.fill();
+      ctx.stroke();
     });
   }
+  
 
   ctx.restore();
 }
